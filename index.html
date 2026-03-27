@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="description" content="Cecile's Adventures - A fun 2D side-scrolling platformer game playable in your browser">
+    <title>Cecile's Adventures - 2D Platformer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="game-canvas"></canvas>
+        <!-- Mobile touch controls -->
+        <div id="touch-controls">
+            <div id="touch-dpad">
+                <button id="touch-left" class="touch-btn dpad-btn" aria-label="Move Left">◀</button>
+                <button id="touch-right" class="touch-btn dpad-btn" aria-label="Move Right">▶</button>
+            </div>
+            <div id="touch-actions">
+                <button id="touch-jump" class="touch-btn action-btn" aria-label="Jump">▲</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Load scripts in dependency order -->
+    <script src="js/engine.js"></script>
+    <script src="js/levels.js"></script>
+    <script src="js/entities.js"></script>
+    <script src="js/game.js"></script>
+</body>
+</html>
