@@ -25,7 +25,7 @@
             this.facing = 1; // 1 = right, -1 = left
 
             // State
-            this.lives = 3;
+            this.lives = 5; // Start with 5 lives
             this.maxLives = 5;
             this.coins = 0;
             this.score = 0;
@@ -39,7 +39,7 @@
             this.state = 'idle'; // idle, run, jump, fall, hurt
 
             // Power-ups
-            this.doubleJump = false;
+            this.doubleJump = true; // Enabled by default now!
             this.canDoubleJump = false;
             this.speedBoost = 0;
 
@@ -62,7 +62,7 @@
             this.state = 'idle';
             this.checkpointX = x;
             this.checkpointY = y;
-            this.doubleJump = false;
+            this.doubleJump = true; // Always on
             this.canDoubleJump = false;
             this.speedBoost = 0;
             this.onPlatform = null;
@@ -70,7 +70,7 @@
 
         /** Full reset (new game) */
         fullReset() {
-            this.lives = 3;
+            this.lives = 5;
             this.coins = 0;
             this.score = 0;
         }
@@ -109,9 +109,15 @@
 
             const inp = BG.input;
             const tiles = level.cleanTiles;
-            const accel = 0.6;
-            const friction = 0.8;
-            const maxSpeed = this.speedBoost > 0 ? this.speed * 1.5 : this.speed;
+            
+            // Detect if submerged in water
+            const centerX = Math.floor((this.x + this.w / 2) / T);
+            const centerY = Math.floor((this.y + this.h / 2) / T);
+            const inWater = this._tile(tiles, centerX, centerY) === '~';
+
+            const accel = inWater ? 0.3 : 0.6;
+            const friction = inWater ? 0.9 : 0.8;
+            const maxSpeed = this.speedBoost > 0 ? this.speed * 1.5 : (inWater ? this.speed * 0.6 : this.speed);
 
             // ---- Horizontal movement ----
             if (inp.left) {
@@ -126,32 +132,48 @@
             }
             this.vx = Math.max(-maxSpeed, Math.min(maxSpeed, this.vx));
 
-            // ---- Jumping (variable height) ----
-            if (inp.jumpDown && this.grounded) {
-                this.vy = this.jumpForce;
-                this.grounded = false;
-                this.canDoubleJump = this.doubleJump;
-                BG.audio.jump();
-                BG.particles.emit(this.x + this.w / 2, this.y + this.h, 6, {
-                    color: '#FFFFFF', minSpd: -2, maxSpd: 2, minLife: 5, maxLife: 12, maxSz: 3
-                });
-            } else if (inp.jumpDown && !this.grounded && this.canDoubleJump) {
-                this.vy = this.jumpForce * 0.85;
-                this.canDoubleJump = false;
-                BG.audio.jump();
-                BG.particles.emit(this.x + this.w / 2, this.y + this.h, 8, {
-                    color: '#90CAF9', minSpd: -3, maxSpd: 3, minLife: 8, maxLife: 15, maxSz: 4
-                });
+            // ---- Jumping & Swimming ----
+            if (inWater) {
+                if (inp.jumpDown) {
+                    this.vy = -4.5; // Swim up impulse
+                    BG.audio.jump();
+                    BG.particles.emit(this.x + this.w / 2, this.y, 4, {
+                        color: '#E0F7FA', minSpd: -1, maxSpd: 1, minLife: 10, maxLife: 20
+                    });
+                }
+            } else {
+                if (inp.jumpDown && this.grounded) {
+                    this.vy = this.jumpForce;
+                    this.grounded = false;
+                    this.canDoubleJump = this.doubleJump;
+                    BG.audio.jump();
+                    BG.particles.emit(this.x + this.w / 2, this.y + this.h, 6, {
+                        color: '#FFFFFF', minSpd: -2, maxSpd: 2, minLife: 5, maxLife: 12, maxSz: 3
+                    });
+                } else if (inp.jumpDown && !this.grounded && this.canDoubleJump) {
+                    // Massive 2x jump power increase for the second double-jump!
+                    this.vy = this.jumpForce * 2.0;
+                    this.canDoubleJump = false;
+                    BG.audio.jump();
+                    BG.particles.emit(this.x + this.w / 2, this.y + this.h, 8, {
+                        color: '#90CAF9', minSpd: -3, maxSpd: 3, minLife: 8, maxLife: 15, maxSz: 4
+                    });
+                }
             }
 
-            // Cut jump short if button released
-            if (!inp.jumpHeld && this.vy < -2) {
+            // Cut jump short if button released (not in water)
+            if (!inWater && !inp.jumpHeld && this.vy < -2) {
                 this.vy *= 0.6;
             }
 
             // ---- Gravity ----
-            this.vy += BG.GRAVITY;
-            if (this.vy > BG.MAX_FALL) this.vy = BG.MAX_FALL;
+            if (inWater) {
+                this.vy += BG.GRAVITY * 0.15; // Buoyancy
+                if (this.vy > 1.8) this.vy = 1.8; // Terminal swim-fall speed
+            } else {
+                this.vy += BG.GRAVITY;
+                if (this.vy > BG.MAX_FALL) this.vy = BG.MAX_FALL;
+            }
 
             // ---- Moving platform carry ----
             let platDx = 0, platDy = 0;

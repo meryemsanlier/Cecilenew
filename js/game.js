@@ -9,7 +9,7 @@
             levels, Player, EnemyAI, drawCoin, drawPortal, drawCheckpoint, drawPowerup } = window.BG;
 
     // ---- Game States ----
-    const STATE = { LOADING: -1, MENU: 0, PLAYING: 1, PAUSED: 2, LEVEL_COMPLETE: 3, GAME_OVER: 4, VICTORY: 5 };
+    const STATE = { LOADING: -1, MENU: 0, PLAYING: 1, PAUSED: 2, LEVEL_COMPLETE: 3, GAME_OVER: 4, VICTORY: 5, CINEMATIC: 6, CREDITS: 7 };
     const assets = window.BG.assets;
 
     // ---- Main Game Class ----
@@ -27,6 +27,11 @@
             this.time = 0;
             this.transition = 0;      // screen transition timer
             this.transitionTarget = null;
+
+            // Fixed timestep setup
+            this.lastTime = 0;
+            this.accumulator = 0;
+            this.step = 1000 / 60;    // 60 Hz physics
 
             // Menu animation
             this.menuBob = 0;
@@ -87,22 +92,39 @@
                 this._startGame();
             } else if (this.state === STATE.GAME_OVER) {
                 audio.select();
-                this.state = STATE.MENU;
+                this._retryLevel();
             } else if (this.state === STATE.VICTORY) {
                 audio.select();
                 this.state = STATE.MENU;
             } else if (this.state === STATE.LEVEL_COMPLETE && this.transition <= 0) {
                 audio.select();
                 this._nextLevel();
+            } else if (this.state === STATE.CREDITS && this.creditsScrollY < -50) {
+                audio.select();
+                this.state = STATE.MENU;
             }
+        }
+
+        // ---- Game Flow ----
+        _retryLevel() {
+            this.player.fullReset(); // reset lives and score
+            // Ensure we clear checkpoints since we are fully restarting the level
+            this.player.checkpointX = null;
+            this.player.checkpointY = null;
+            this._loadLevel(this.levelIdx);
+            this.state = STATE.PLAYING;
         }
 
         // ---- Game Flow ----
         _startGame() {
             this.player.fullReset();
-            this.levelIdx = 0;
-            this._loadLevel(0);
-            this.state = STATE.PLAYING;
+            this.levelIdx = 0; // Starts from Level 1
+            if (this.levelIdx === 5) {
+                this._startCinematic();
+            } else {
+                this._loadLevel(this.levelIdx);
+                this.state = STATE.PLAYING;
+            }
         }
 
         _loadLevel(idx) {
@@ -122,30 +144,63 @@
         }
 
         _nextLevel() {
-            if (this.levelIdx + 1 >= levels.length) {
-                this.state = STATE.VICTORY;
-                audio.levelWin();
+            if (this.levelIdx + 1 >= 5) { // Level 6 and up go straight to cinematic
+                this._startCinematic();
             } else {
                 this._loadLevel(this.levelIdx + 1);
                 this.state = STATE.PLAYING;
             }
         }
 
+        _startCinematic() {
+            this.state = STATE.CINEMATIC;
+            this.cinematicTime = 0;
+            this.cinematicPhase = 0;
+            this.cinematicLogoHits = 0;
+            audio.levelWin(); // Play victory intro sound
+        }
+
         // ============================================
         // MAIN GAME LOOP
         // ============================================
         _loop(timestamp) {
-            this.time = timestamp || 0;
+            if (!this.lastTime) this.lastTime = timestamp;
+            let dt = timestamp - this.lastTime;
+            this.lastTime = timestamp;
+            
+            // Limit dt to prevent spiral of death if tab was inactive
+            if (dt > 250) dt = 250;
+            
+            this.accumulator += dt;
+            this.time = timestamp; // Pass visual time
+
+            // Update inputs once per visual frame
             input.update();
 
+            // Run fixed logic steps
+            while (this.accumulator >= this.step) {
+                switch (this.state) {
+                    case STATE.MENU:     this._updateMenu(); break;
+                    case STATE.PLAYING:  this._updatePlaying(); break;
+                    case STATE.PAUSED:   this._updatePaused(); break;
+                    case STATE.LEVEL_COMPLETE: this._updateLevelComplete(); break;
+                    case STATE.CINEMATIC: this._updateCinematic(); break;
+                    case STATE.CREDITS:   this._updateCredits(); break;
+                }
+                this.accumulator -= this.step;
+            }
+
+            // Render once per visual frame
             switch (this.state) {
                 case STATE.LOADING:  this._renderLoading(); break;
-                case STATE.MENU:     this._updateMenu(); this._renderMenu(); break;
-                case STATE.PLAYING:  this._updatePlaying(); this._renderPlaying(); break;
-                case STATE.PAUSED:   this._updatePaused(); this._renderPlaying(); this._renderPause(); break;
-                case STATE.LEVEL_COMPLETE: this._updateLevelComplete(); this._renderPlaying(); this._renderLevelComplete(); break;
+                case STATE.MENU:     this._renderMenu(); break;
+                case STATE.PLAYING:  this._renderPlaying(); break;
+                case STATE.PAUSED:   this._renderPlaying(); this._renderPause(); break;
+                case STATE.LEVEL_COMPLETE: this._renderPlaying(); this._renderLevelComplete(); break;
                 case STATE.GAME_OVER: this._renderGameOver(); break;
                 case STATE.VICTORY:  this._renderVictory(); break;
+                case STATE.CINEMATIC: this._renderCinematic(); break;
+                case STATE.CREDITS:   this._renderCredits(); break;
             }
 
             requestAnimationFrame(this._loop);
@@ -498,6 +553,27 @@
 
         _renderBGElements(ctx, lvl, cx, cy) {
             const theme = lvl.theme;
+            if (theme.name === 'Midnight Ocean') {
+                const px = cx * 0.1;
+                // Draw moon
+                ctx.fillStyle = '#FFF59D';
+                ctx.beginPath();
+                ctx.arc(CW / 2 - px * 0.5 + 200, 100, 40, 0, Math.PI * 2);
+                ctx.fill();
+                // Draw stars
+                ctx.fillStyle = '#FFFFFF';
+                for (let i = 0; i < 40; i++) {
+                    const sx = (i * 87 - px * 0.2) % CW;
+                    const realSx = sx < 0 ? sx + CW : sx;
+                    const sy = (i * 31) % (CH / 2);
+                    const alpha = 0.5 + Math.sin(this.time * 0.005 + i) * 0.5;
+                    ctx.globalAlpha = alpha;
+                    ctx.fillRect(realSx, sy, 2, 2);
+                }
+                ctx.globalAlpha = 1;
+                return;
+            }
+
             const parallax = 0.3;
             const px = cx * parallax;
 
@@ -591,6 +667,18 @@
                         ctx.fillStyle = theme.platform;
                         ctx.fillRect(tx + 3, ty + 8, T - 6, 4);
 
+                    } else if (tile === '~') {
+                        // Water tile
+                        ctx.fillStyle = 'rgba(0, 119, 190, 0.4)'; // translucent blue
+                        // Undulating surface if it's the top tile
+                        if (r === 0 || tiles[r-1][c] !== '~') {
+                            const wave = Math.sin(this.time * 0.005 + c) * 4;
+                            ctx.fillRect(tx, ty + 8 + wave, T, T - 8 - wave);
+                            ctx.fillStyle = 'rgba(255, 255, 255, 0.2)'; // Foam
+                            ctx.fillRect(tx, ty + 8 + wave, T, 4);
+                        } else {
+                            ctx.fillRect(tx, ty, T, T);
+                        }
                     } else if (tile === '^') {
                         // Spikes
                         const spikeColor = lvl.num >= 4 ? '#FF5722' : '#B0BEC5';
@@ -829,6 +917,254 @@
             ctx.font = '10px "Press Start 2P", monospace';
             const pulse = Math.sin(this.time * 0.005) > 0;
             if (pulse) ctx.fillText('Click to Play Again', CW / 2, CH - 40);
+        }
+
+        // ============================================
+        // CINEMATIC & CREDITS
+        // ============================================
+        _updateCinematic() {
+            this.cinematicTime++;
+            const t = this.cinematicTime;
+            
+            if (t === 360) {
+                this.cinematicPhase = 1; // Wind up axe
+            } else if (t === 410) {
+                this.cinematicPhase = 2; // Strike 1
+                this._doAxeHit(1);
+            } else if (t === 470) {
+                this.cinematicPhase = 3; // Strike 2
+                this._doAxeHit(2);
+            } else if (t === 540) {
+                this.cinematicPhase = 4; // Strike 3
+                this._doAxeHit(3);
+            } else if (t > 700) {
+                this.state = STATE.CREDITS;
+                this.creditsScrollY = CH + 50;
+            }
+            particles.update();
+        }
+
+        _doAxeHit(hits) {
+            this.cinematicLogoHits = hits;
+            audio.hit();
+            camera.doShake(hits * 5, 20 + hits * 10);
+            
+            if (hits === 3) {
+                // Shatter completely
+                particles.emit(CW / 2 + 100, CH / 2, 100, { color: '#FFD700', minSpd: -12, maxSpd: 12, minLife: 30, maxLife: 80, minSz: 3, maxSz: 8 });
+                particles.emit(CW / 2 + 100, CH / 2, 80, { color: '#FF4444', minSpd: -8, maxSpd: 8, minLife: 20, maxLife: 50, minSz: 2, maxSz: 5 });
+            } else {
+                // Just some dust
+                particles.emit(CW / 2 + 100, CH / 2, 30, { color: '#EEEEEE', minSpd: -4, maxSpd: 4, minLife: 15, maxLife: 30 });
+            }
+        }
+
+        _renderCinematic() {
+            const ctx = this.ctx;
+            const t = this.cinematicTime;
+            
+            // 1. Draw Night Background & Moon & Stars
+            ctx.fillStyle = '#010515';
+            ctx.fillRect(0, 0, CW, CH);
+            
+            ctx.fillStyle = '#FFF59D';
+            ctx.beginPath();
+            ctx.arc(CW / 2 + 150, 100, 40, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.fillStyle = '#FFFFFF';
+            for (let i = 0; i < 40; i++) {
+                const sx = (i * 87) % CW;
+                const sy = (i * 31) % (CH / 2);
+                const alpha = 0.5 + Math.sin(this.time * 0.005 + i) * 0.5;
+                ctx.globalAlpha = alpha;
+                ctx.fillRect(sx, sy, 2, 2);
+            }
+            ctx.globalAlpha = 1;
+
+            // 2. Draw Water Waves
+            const waterY = CH / 2 + 40;
+            ctx.fillStyle = 'rgba(0, 119, 190, 0.6)';
+            ctx.fillRect(0, waterY, CW, CH - waterY);
+            
+            ctx.fillStyle = 'rgba(0, 150, 220, 0.8)';
+            for (let x = 0; x <= CW; x += 20) {
+                const wave = Math.sin(this.time * 0.05 + x) * 6;
+                ctx.fillRect(x, waterY - 8 + wave, 20, 12);
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.4)'; // Foam
+                ctx.fillRect(x, waterY - 8 + wave, 20, 3);
+                ctx.fillStyle = 'rgba(0, 150, 220, 0.8)';
+            }
+            
+            ctx.save();
+            if (camera.shakeDur > 0) {
+                ctx.translate((Math.random() - 0.5) * camera.shake, (Math.random() - 0.5) * camera.shake);
+                camera.shakeDur--;
+            }
+
+            // 3. Draw Halic Logo
+            const logoImg = assets.get('halic');
+            const logoX = CW - 120;
+            const logoY = waterY - 60;
+            if (logoImg && this.cinematicLogoHits < 3) {
+                const drawW = 200;
+                const drawH = Math.round(200 * (logoImg.height / logoImg.width));
+                ctx.save();
+                ctx.translate(logoX, logoY);
+                ctx.translate(0, Math.sin(this.time * 0.02) * 4);
+                ctx.drawImage(logoImg, -drawW / 2, -drawH / 2, drawW, drawH);
+                
+                // Draw cracks
+                if (this.cinematicLogoHits >= 1) {
+                    ctx.strokeStyle = '#222';
+                    ctx.lineWidth = 4;
+                    ctx.beginPath();
+                    ctx.moveTo(-20, -50);
+                    ctx.lineTo(10, -10);
+                    ctx.lineTo(-5, 30);
+                    ctx.stroke();
+                }
+                if (this.cinematicLogoHits >= 2) {
+                    ctx.beginPath();
+                    ctx.moveTo(30, -40);
+                    ctx.lineTo(0, 10);
+                    ctx.lineTo(40, 40);
+                    ctx.stroke();
+                    // Additional large crack
+                    ctx.beginPath();
+                    ctx.moveTo(-40, 10);
+                    ctx.lineTo(-10, 20);
+                    ctx.lineTo(20, 70);
+                    ctx.stroke();
+                }
+                ctx.restore();
+            }
+
+            // 4. Draw Cecile
+            const cecileImg = assets.get('cecile');
+            if (cecileImg) {
+                let cx = -100;
+                let cy = waterY - 10;
+                let bob = Math.sin(this.time * 0.05) * 6;
+                let rot = 0;
+                
+                if (t < 360) {
+                    // Swim Phase
+                    cx = -100 + (t / 360) * (logoX - 120 - (-100)); // Swim to logo
+                    rot = 0.2 + Math.sin(this.time * 0.1) * 0.1; // swim rotate
+                } else {
+                    // Reached the logo
+                    cx = logoX - 120;
+                    
+                    if (this.cinematicPhase === 1) rot = -0.3; 
+                    else if (this.cinematicPhase === 2) rot = 0.2;
+                    else if (this.cinematicPhase === 3) rot = 0.3;
+                    else if (this.cinematicPhase >= 4) rot = 0.4;
+                    
+                    // Chop animations
+                    if (t >= 390 && t < 410) { rot = -0.8; cx -= 10; cy -= 10; } // wind 1
+                    if (t === 410 || t === 411) { rot = 0.5; cx += 20; }  // chop 1
+                    
+                    if (t >= 450 && t < 470) { rot = -1.0; cx -= 15; cy -= 15; } // wind 2
+                    if (t === 470 || t === 471) { rot = 0.6; cx += 30; }  // chop 2
+                    
+                    if (t >= 500 && t < 540) { rot = -1.5; cx -= 25; cy -= 25; } // wind 3 (HUGE)
+                    if (t >= 540 && t <= 544) { rot = 1.0; cx += 50; }  // chop 3
+                }
+                cy += bob;
+
+                const drawW = 140;
+                const drawH = Math.round(140 * (cecileImg.height / cecileImg.width));
+                
+                ctx.save();
+                ctx.translate(cx, cy);
+                ctx.rotate(rot);
+                
+                ctx.drawImage(cecileImg, -drawW / 2, -drawH / 2, drawW, drawH);
+                
+                // Swimsuit / Snorkel
+                if (t < 360) {
+                    ctx.strokeStyle = '#E91E63';
+                    ctx.lineWidth = 14;
+                    ctx.beginPath();
+                    ctx.ellipse(0, 30, 50, 20, 0, 0, Math.PI * 2);
+                    ctx.stroke();
+                    // Optional bright colors
+                    ctx.strokeStyle = '#29B6F6';
+                    ctx.beginPath();
+                    ctx.ellipse(0, 30, 50, 20, 0, Math.PI, Math.PI * 2);
+                    ctx.stroke();
+                }
+                
+                // Draw Axe
+                if (t >= 360) {
+                    ctx.save();
+                    ctx.translate(15, 20); // Hand pos
+                    ctx.fillStyle = '#795548';
+                    ctx.fillRect(-15, -60, 10, 90);
+                    ctx.fillStyle = '#B0BEC5';
+                    ctx.beginPath();
+                    ctx.moveTo(-17, -50);
+                    ctx.lineTo(25, -70);
+                    ctx.lineTo(27, -20);
+                    ctx.lineTo(-17, -30);
+                    ctx.fill();
+                    ctx.fillStyle = '#CFD8DC';
+                    ctx.beginPath();
+                    ctx.moveTo(10, -55);
+                    ctx.lineTo(25, -65);
+                    ctx.lineTo(27, -25);
+                    ctx.lineTo(10, -35);
+                    ctx.fill();
+                    ctx.restore();
+                }
+                ctx.restore();
+            }
+
+            particles.render(ctx, 0, 0);
+            ctx.restore(); // camera shake
+
+            if (this.cinematicPhase === 4 && t > 540 && t < 560) {
+                ctx.fillStyle = `rgba(255, 255, 255, ${1 - (t - 540) / 20})`;
+                ctx.fillRect(0, 0, CW, CH);
+            }
+        }
+
+        _updateCredits() {
+            this.creditsScrollY -= 0.6; // Scroll speed
+        }
+
+        _renderCredits() {
+            const ctx = this.ctx;
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(0, 0, CW, CH);
+
+            // Render starry background similar to menu
+            for (const s of this.stars) {
+                ctx.globalAlpha = s.alpha * (0.5 + Math.sin(this.time * 0.002 + s.x) * 0.5);
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fillRect(s.x, s.y, s.size, s.size);
+            }
+            ctx.globalAlpha = 1;
+
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            // Text
+            ctx.fillStyle = '#FFFFFF';
+            ctx.font = 'bold 20px "Press Start 2P", monospace';
+            ctx.fillText("Sesil yeni hayatında artık çok mutlu,", CW / 2, this.creditsScrollY);
+            
+            ctx.fillStyle = '#FF6B9D'; // Meryem & Hamza color
+            ctx.font = '16px "Press Start 2P", monospace';
+            ctx.fillText("meryem ile hamza gururla sunar", CW / 2, this.creditsScrollY + 40);
+
+            if (this.creditsScrollY < -50) {
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+                ctx.font = '12px "Press Start 2P", monospace';
+                const pulse = Math.sin(this.time * 0.005) > 0;
+                if (pulse) ctx.fillText('Click to Return to Menu', CW / 2, CH - 40);
+            }
         }
     }
 
